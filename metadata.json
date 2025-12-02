@@ -1,0 +1,5 @@
+{
+  "name": "SteamInsight 2025: 国产游戏舆情分析",
+  "description": "A specialized tool for analyzing Steam reviews of Chinese games released in 2025 and beyond. Features real-time data fetching, custom filtering, and AI-powered sentiment analysis.",
+  "requestFramePermissions": []
+}

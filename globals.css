@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 198, 212, 223;
+  --background-start-rgb: 15, 18, 22;
+  --background-end-rgb: 15, 18, 22;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: #0f1216;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.5s ease-out forwards;
+}
+
+/* Custom scrollbar for raw review list */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #171a21; 
+}
+::-webkit-scrollbar-thumb {
+  background: #2a475e; 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #66c0f4; 
+}
