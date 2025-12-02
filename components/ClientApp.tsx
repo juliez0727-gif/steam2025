@@ -5,7 +5,7 @@ import { Search, Loader2, Gamepad2, Info, RefreshCw, BarChart3, Globe2, CheckCir
 import { getGameDetails, searchGames, fetchReviews, scanForHighTrafficGames } from '@/services/steamService';
 import { analyzeReviewsWithGemini } from '@/services/geminiService';
 import { SteamGame, SteamReview, FilterCriteria, AnalysisReport } from '@/types';
-import ReviewFilter from '../ReviewFilter';
+import ReviewFilter from './ReviewFilter';
 import AnalysisResult from './AnalysisResult';
 
 // Default filters for 2025 mandate
