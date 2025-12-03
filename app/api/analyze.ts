@@ -1,124 +1,82 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { AnalysisReport, SteamReview } from '../../types';
+import { GoogleGenAI, Type } from "@google/genai";
+import { NextResponse } from 'next/server';
 
-type Body = {
-  gameName: string;
-  reviews: SteamReview[];
+// Initialize Gemini on the server side ONLY
+const initGenAI = () => {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("Server configuration error: API Key is missing.");
+  }
+  return new GoogleGenAI({ apiKey });
 };
 
-const GEMINI_MODEL = 'text-bison-001';
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const { gameName, reviews } = req.body as Body;
-
-  if (!gameName || !Array.isArray(reviews)) {
-    return res.status(400).json({ error: 'Invalid request body' });
-  }
-
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'Server misconfiguration: GEMINI_API_KEY missing' });
-  }
-
-  // Build a compact prompt. Keep reviews sample size limited to control payload.
-  const sample = reviews.slice(0, 300).map((r, i) => `${i + 1}. ${r.review}`).join('\n');
-
-  const instruction = `请基于下面的游戏评论集合，生成一个 JSON 对象，结构为:
-{
-  "summary": string,
-  "positivePoints": string[],
-  "negativePoints": string[],
-  "technicalIssues": string[],
-  "verdict": string,
-  "sentimentScore": number  // 0-100
-}
-
-说明：
-- 只返回严格的 JSON（不要额外文本或注释）。
-- 按重点提炼要点，数组内每项短小（不超过20字）。
-- sentimentScore 表示整体情绪（100 非常正面，0 非常负面）。
-
-游戏名：${gameName}
-评论样本：\n${sample}`;
-
+export async function POST(request: Request) {
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta2/models/${GEMINI_MODEL}:generate?key=${encodeURIComponent(apiKey)}`;
+    const { gameName, reviews } = await request.json();
 
-    const payload = {
-      prompt: { text: instruction },
-      temperature: 0.1,
-      maxOutputTokens: 800
-    };
-
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!r.ok) {
-      const text = await r.text();
-      console.error('Gemini API error:', r.status, text);
-      return res.status(502).json({ error: 'AI service error', detail: text });
+    if (!gameName || !reviews || !Array.isArray(reviews)) {
+      return NextResponse.json({ error: "Invalid request data" }, { status: 400 });
     }
 
-    const json = await r.json();
+    const ai = initGenAI();
 
-    // Extract generated text from likely response shapes
-    let outputText: string | undefined;
-    if (json.candidates && json.candidates.length > 0 && json.candidates[0].output) {
-      outputText = json.candidates[0].output;
-    } else if (json.output && json.output[0] && json.output[0].content) {
-      // Newer responses sometimes nest content
-      const parts = json.output[0].content.map((c: any) => c.text || c.type === 'generated_text' && c.text).filter(Boolean);
-      outputText = parts.join('');
-    } else if (typeof json === 'object') {
-      // Fallback: stringify whole response and try to pull text
-      outputText = JSON.stringify(json);
-    }
+    // Prepare data for the prompt.
+    const reviewsText = reviews.map((r: any) => {
+      // Handle both raw steam review format and potentially sanitized format
+      const hours = (r.author.playtime_forever / 60).toFixed(1);
+      const date = new Date(r.timestamp_created * 1000).toLocaleDateString('zh-CN');
+      const vote = r.voted_up ? "好评" : "差评";
+      const content = r.review.replace(/(\r\n|\n|\r)/gm, " ").substring(0, 300); 
+      return `[${date}, ${hours}小时, ${vote}] ${content}`;
+    }).join("\n");
 
-    if (!outputText) {
-      return res.status(502).json({ error: 'AI returned no output' });
-    }
+    const prompt = `
+      你是一位专业的游戏数据分析师。请针对国产游戏《${gameName}》的以下Steam用户评论数据进行深度分析。
+      
+      数据包含：评论日期、游玩时长、好评/差评状态、评论内容。
+      
+      请生成一份详细的中文分析报告，必须包含以下 JSON 结构的字段：
+      - summary: 整体舆情总结（200字以内）
+      - positivePoints: 玩家普遍称赞的优点（数组，提取3-5点）
+      - negativePoints: 玩家普遍抱怨的缺点（数组，提取3-5点）
+      - technicalIssues: 提到的具体技术问题或Bug（数组，如优化差、闪退等）
+      - verdict: 最终购买建议与评价（简短有力）
+      - sentimentScore: 综合情感评分（0-100的整数，100为完美）
 
-    // The model was instructed to return pure JSON. Try to parse it.
-    let parsed: AnalysisReport | null = null;
-    try {
-      parsed = JSON.parse(outputText) as AnalysisReport;
-    } catch (e) {
-      // Try to extract JSON substring
-      const m = outputText.match(/\{[\s\S]*\}/);
-      if (m) {
-        try {
-          parsed = JSON.parse(m[0]) as AnalysisReport;
-        } catch (e2) {
-          // ignore
+      请忽略无意义的刷屏评论。重点关注2025年后的游戏设计趋势、文化输出以及技术表现。
+
+      评论数据如下:
+      ${reviewsText}
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            summary: { type: Type.STRING },
+            positivePoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+            negativePoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+            technicalIssues: { type: Type.ARRAY, items: { type: Type.STRING } },
+            verdict: { type: Type.STRING },
+            sentimentScore: { type: Type.INTEGER },
+          }
         }
       }
-    }
+    });
 
-    if (!parsed) {
-      // As a graceful fallback, return a minimal structure with the raw text in summary
-      return res.status(200).json({
-        summary: outputText.slice(0, 2000),
-        positivePoints: [],
-        negativePoints: [],
-        technicalIssues: [],
-        verdict: '无法解析模型输出为 JSON，请检查模型响应',
-        sentimentScore: 50
-      } as AnalysisReport);
+    if (response.text) {
+      const report = JSON.parse(response.text);
+      return NextResponse.json(report);
     }
+    
+    return NextResponse.json({ error: "No analysis generated" }, { status: 500 });
 
-    return res.status(200).json(parsed);
-  } catch (err) {
-    console.error('Analyze handler error', err);
-    return res.status(500).json({ error: 'Server error' });
+  } catch (error: any) {
+    console.error("Gemini Server Error:", error);
+    return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });
   }
 }
